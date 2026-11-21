@@ -25,7 +25,10 @@ def fat_disk(path, esp, missing_child):
     with path.open("xb") as f:
         f.truncate(part_size + 2 * mib)
     sectors = part_size // 512
-    subprocess.run(["sfdisk", "--quiet", str(path)],
+    sfdisk = shutil.which("sfdisk") or shutil.which("sfdisk", path="/usr/sbin:/sbin")
+    if not sfdisk:
+        raise SystemExit("Install sfdisk (util-linux) to partition the temporary EFI disk.")
+    subprocess.run([sfdisk, "--quiet", str(path)],
                    input=f"label: gpt\nstart=2048, size={sectors}, type=U\n".encode(), check=True)
     volume = f"{path}@@{mib}"
     subprocess.run(["mformat", "-i", volume, "-F", "-T", str(sectors), "-H", "2048", "::"], check=True)
@@ -156,6 +159,18 @@ def preferred_image_base(path):
     raise ValueError(f"{path}: missing PE DIR64 base relocation")
 
 
+def check_guest_https(con):
+    con.send(b"neboot_http=$(curl -4 -fsS --max-time 25 -o /dev/null -w '%{http_code}' https://example.com/); "
+             b"""printf '\\nNEBOOT_HTTPS=%s CURL_EXIT=%s\\n' "$neboot_http" "$?"\r""")
+    result = con.expect(rb"\r?\nNEBOOT_HTTPS=([0-9]{3}|) CURL_EXIT=([0-9]+)\r?\n", 35)
+    http_code = result[1].decode() or "unavailable"
+    curl_exit = int(result[2])
+    if curl_exit or not http_code.startswith("2"):
+        raise RuntimeError(f"guest HTTPS example.com failed (curl exit {curl_exit}, HTTP {http_code}). "
+                           f"See {con.log.name}")
+    print(f"PASS guest HTTPS example.com status {http_code}", flush=True)
+
+
 def exercise(args, root, code, nvram, recovery, preferred):
     name = "openrc-missing" if recovery else "theseus-chainload"
     disk = root / (name + ".img")
@@ -179,9 +194,7 @@ def exercise(args, root, code, nvram, recovery, preferred):
         pid1 = b"openrc-init" if recovery else b"theseus-init"
         con.expect(rb"\r?\nPID1=" + pid1 + rb"\r?\n", 30)
         if args.check_internet and not recovery:
-            con.send(b"curl -4 -fsS --max-time 25 -o /dev/null -w '\\nNEBOOT_HTTPS=%{http_code}\\n' https://example.com/\r")
-            status = con.expect(rb"\r?\nNEBOOT_HTTPS=(2[0-9]{2})\r?\n", 35)
-            print(f"PASS guest HTTPS example.com status {status[1].decode()}", flush=True)
+            check_guest_https(con)
         print(f"PASS {name}: {preferred:#x} -> {actual:#x}, PID 1 {pid1.decode()}", flush=True)
 
 
@@ -198,6 +211,8 @@ def main():
                         ("kvm" if os.access("/dev/kvm", os.R_OK | os.W_OK) else "tcg"))
     parser.add_argument("--timeout", type=int, default=180, help="seconds per firmware or Linux boot")
     args = parser.parse_args()
+    if args.interactive and args.check_internet:
+        parser.error("For the automated HTTPS check, replace --interactive with --logs DIR --check-internet")
     code, nvram = firmware_paths(args.ovmf_code, args.ovmf_vars)
     if not args.interactive:
         if args.logs is None:
