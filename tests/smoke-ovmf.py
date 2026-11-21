@@ -13,11 +13,14 @@ import subprocess
 import tempfile
 import time
 
-PAYLOAD = ("EFI/BOOT/BOOTX64.EFI", "EFI/TOOLS/second.efi", "boot/vmlinuz", "boot/initramfs")
+CHILD = "EFI/TOOLS/second.efi"
+KERNEL = "boot/vmlinuz"
+INITRAMFS = "boot/initramfs"
+PAYLOAD = ("EFI/BOOT/BOOTX64.EFI", CHILD, KERNEL, INITRAMFS)
 
 
-def fat_disk(path, esp, missing_child):
-    files = [name for name in PAYLOAD if not (missing_child and name == "EFI/TOOLS/second.efi")]
+def fat_disk(path, esp, omit=None):
+    files = [name for name in PAYLOAD if name != omit]
     payload_size = sum((esp / name).stat().st_size for name in files)
     mib = 1024 * 1024
     part_size = max(64, (payload_size + 8 * mib + mib - 1) // mib) * mib
@@ -64,6 +67,10 @@ class Console:
     def send(self, data):
         self.proc.stdin.write(data)
         self.proc.stdin.flush()
+
+    def expect_missing(self, path):
+        firmware_path = ("\\" + path.replace("/", "\\")).encode("ascii")
+        self.expect(b"Cannot open " + re.escape(firmware_path) + rb" \(EFI status 0x0*800000000000000[eE]\)", 30)
 
     def menu(self, seconds):
         self.expect(rb"Cascadia EFI menu", seconds)
@@ -174,7 +181,7 @@ def check_guest_https(con):
 def exercise(args, root, code, nvram, recovery, preferred):
     name = "openrc-missing" if recovery else "theseus-chainload"
     disk = root / (name + ".img")
-    fat_disk(disk, args.esp, recovery)
+    fat_disk(disk, args.esp, omit=CHILD if recovery else None)
     with console(args, disk, nvram, code, name) as con:
         report = con.expect(rb"neboot loaded 0x([0-9a-fA-F]+)\r?\n", args.timeout)
         actual = int(report[1], 16)
@@ -183,7 +190,7 @@ def exercise(args, root, code, nvram, recovery, preferred):
         con.menu(15)
         con.send(b"3")
         if recovery:
-            con.expect(rb"Cannot open \\EFI\\TOOLS\\second\.efi \(EFI status 0x0*800000000000000[eE]\)", 30)
+            con.expect_missing(CHILD)
         else:
             con.expect(rb"neboot child EFI application ran", 30)
         con.menu(15)
@@ -196,6 +203,23 @@ def exercise(args, root, code, nvram, recovery, preferred):
         if args.check_internet and not recovery:
             check_guest_https(con)
         print(f"PASS {name}: {preferred:#x} -> {actual:#x}, PID 1 {pid1.decode()}", flush=True)
+
+
+def exercise_missing_boot_file(args, root, code, nvram, name, missing):
+    disk = root / (name + ".img")
+    fat_disk(disk, args.esp, omit=missing)
+    with console(args, disk, nvram, code, name) as con:
+        con.menu(args.timeout)
+        for key in (b"1", b"2"):
+            con.send(key)
+            con.expect_missing(missing)
+            con.menu(15)
+
+        con.send(b"3")
+        con.expect(rb"neboot child EFI application ran", 30)
+        con.menu(15)
+        print(f"PASS {name}: Theseus and OpenRC reported EFI_NOT_FOUND for /{missing}; "
+              "child EFI ran and returned to menu", flush=True)
 
 
 def main():
@@ -229,13 +253,15 @@ def main():
         root = Path(tmp)
         if args.interactive:
             disk = root / "menu.img"
-            fat_disk(disk, args.esp, False)
+            fat_disk(disk, args.esp)
             print("Press Ctrl-A X to exit QEMU.", flush=True)
             subprocess.run(command(args, disk, nvram, code, "interactive"), check=True)
         else:
             preferred = preferred_image_base(args.esp / PAYLOAD[0])
             for recovery in (False, True):
                 exercise(args, root, code, nvram, recovery, preferred)
+            for name, missing in (("missing-kernel", KERNEL), ("missing-initramfs", INITRAMFS)):
+                exercise_missing_boot_file(args, root, code, nvram, name, missing)
 
 
 if __name__ == "__main__":

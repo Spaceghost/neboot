@@ -60,4 +60,11 @@ through the EFI loaded-image protocol. Both guest boots exercise the relocated
 menu banner. One run chainloads the second application and starts Theseus.
 The other omits that application, checks the error, and starts OpenRC. Both
 runs read PID 1 from the live guest. Add `--check-internet` to test guest HTTPS.
- The [firmware test record](docs/ovmf-proof.txt) identifies the exact EFI files and Cascadia image.
+
+Two more disks omit the kernel and initramfs respectively. On each disk, the
+test selects Theseus and OpenRC recovery, checks the missing path and
+`EFI_NOT_FOUND`, then chainloads the child application and waits for the menu
+to return. The serial transcripts are `missing-kernel.log` and
+`missing-initramfs.log` in the log directory.
+
+The [firmware test record](docs/ovmf-proof.txt) identifies the exact EFI files and Cascadia image.
