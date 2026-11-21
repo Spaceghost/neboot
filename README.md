@@ -75,6 +75,26 @@ The ESP contains `EFI/BOOT/BOOTX64.EFI`, `EFI/TOOLS/second.efi`, `boot/vmlinuz`
 and `boot/initramfs`. Use a kernel built with the x86-64 EFI stub. This proof
 uses OVMF with Secure Boot disabled.
 
+## Stage the Core profile
+
+The opt-in Core profile starts the native Theseus service graph directly as
+PID 1. It provides no OpenRC recovery entry. Build and stage it with a kernel
+and Core developer initramfs:
+
+```sh
+make stage-core-native ESP=build/core-esp \
+  KERNEL=/path/to/vmlinuz INITRD=/path/to/developer.cpio.gz
+python3 tests/smoke-ovmf.py --core --esp build/core-esp --logs build/core-logs
+```
+
+The Core smoke test verifies `/proc/1/exe`, foundation and serial-console
+state, then sends Theseus PID 1 a poweroff request and checks supervisor exit
+and kernel poweroff. `--keep-disk build/core.img` retains its GPT/FAT boot disk.
+
+The Core menu passes `rdinit=/init theseus.pid1=1` and `initrd=\\boot\\initramfs`.
+The default `make stage` and `make run-live` profile remains the live menu with
+Theseus, OpenRC recovery, and the EFI child application.
+
 The smoke test reads the preferred base and DIR64 fixups from the file. It
 compares the preferred base with the address reported by the running loader
 through the EFI loaded-image protocol. Both guest boots exercise the relocated

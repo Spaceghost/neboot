@@ -4,12 +4,16 @@ NELINKER ?= nelinker
 OUT ?= build
 ESP ?= $(OUT)/esp
 NATIVE_OUT ?= $(OUT)/native
+CORE_NATIVE_OUT ?= $(OUT)/core-native
 
-.PHONY: all native stage stage-native stage-iso stage-iso-native run-live run-live-native
+.PHONY: all native native-core stage stage-native stage-core-native stage-iso stage-iso-native run-live run-live-native
 .DELETE_ON_ERROR:
 .SECONDARY:
 all: $(OUT)/BOOTX64.EFI $(OUT)/second.efi
 native: $(NATIVE_OUT)/BOOTX64.EFI $(NATIVE_OUT)/second.efi
+
+# Core uses Theseus as PID 1 directly; it has no OpenRC recovery menu entry.
+native-core: $(CORE_NATIVE_OUT)/BOOTX64.EFI $(NATIVE_OUT)/second.efi
 
 $(OUT):
 	mkdir -p "$@"
@@ -29,14 +33,23 @@ $(OUT)/second.efi: $(OUT)/chain.o
 $(NATIVE_OUT):
 	mkdir -p "$@"
 
+$(CORE_NATIVE_OUT):
+	mkdir -p "$@"
+
 $(NATIVE_OUT)/%.o: src/%.nelua src/efi.nelua Makefile | $(NATIVE_OUT)
 	$(NECC) --native --release -L src -c "$<" -o "$@"
+
+$(CORE_NATIVE_OUT)/menu.o: src/menu.nelua src/efi.nelua Makefile | $(CORE_NATIVE_OUT)
+	$(NECC) --native --release -L src --define NEBOOT_CORE=true -c "$<" -o "$@"
 
 $(NATIVE_OUT)/BOOTX64.EFI: $(NATIVE_OUT)/menu.o Makefile
 	$(NELINKER) --efi-app --image-base 0x100000000 -e efi_main -o "$@" "$<"
 
 $(NATIVE_OUT)/second.efi: $(NATIVE_OUT)/chain.o
 	$(NELINKER) --efi-app -e efi_main -o "$@" "$<"
+
+$(CORE_NATIVE_OUT)/BOOTX64.EFI: $(CORE_NATIVE_OUT)/menu.o Makefile
+	$(NELINKER) --efi-app --image-base 0x100000000 -e efi_main -o "$@" "$<"
 
 stage: all
 	test -n "$(ESP)" && test -f "$(KERNEL)" && test -f "$(INITRD)"
@@ -48,6 +61,13 @@ stage: all
 stage-native: native
 	test -n "$(ESP)" && test -f "$(KERNEL)" && test -f "$(INITRD)"
 	install -Dm644 "$(NATIVE_OUT)/BOOTX64.EFI" "$(ESP)/EFI/BOOT/BOOTX64.EFI"
+	install -Dm644 "$(NATIVE_OUT)/second.efi" "$(ESP)/EFI/TOOLS/second.efi"
+	install -Dm644 "$(KERNEL)" "$(ESP)/boot/vmlinuz"
+	install -Dm644 "$(INITRD)" "$(ESP)/boot/initramfs"
+
+stage-core-native: native-core
+	test -n "$(ESP)" && test -f "$(KERNEL)" && test -f "$(INITRD)"
+	install -Dm644 "$(CORE_NATIVE_OUT)/BOOTX64.EFI" "$(ESP)/EFI/BOOT/BOOTX64.EFI"
 	install -Dm644 "$(NATIVE_OUT)/second.efi" "$(ESP)/EFI/TOOLS/second.efi"
 	install -Dm644 "$(KERNEL)" "$(ESP)/boot/vmlinuz"
 	install -Dm644 "$(INITRD)" "$(ESP)/boot/initramfs"

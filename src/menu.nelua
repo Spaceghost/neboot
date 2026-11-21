@@ -3,7 +3,11 @@
 require 'efi'
 
 -- This initialized address occupies a DIR64 relocation in the EFI image.
+## if NEBOOT_CORE then
+global neboot_banner: cstring <cexport, codename 'neboot_banner'> = 'Cascadia Core EFI menu\r\n'
+## else
 global neboot_banner: cstring <cexport, codename 'neboot_banner'> = 'Cascadia EFI menu\r\n'
+## end
 
 local BadImage: usize <comptime> = 0x8000000000000001
 local BadSize: usize <comptime> = 0x8000000000000004
@@ -119,7 +123,11 @@ local function efi_main(image: pointer, st: *efi.System): usize <cexport, codena
   st.boot.watchdog(0, 0, 0, nilptr)
   repeat
     efi.put(st, neboot_banner)
+    ## if NEBOOT_CORE then
+    efi.put(st, '1  Boot Cascadia Core (Theseus)\r\n2  Chainload \\EFI\\TOOLS\\second.efi\r\nQ  Return to firmware\r\n')
+    ## else
     efi.put(st, '1  Cascadia (Theseus)\r\n2  Cascadia (OpenRC recovery)\r\n3  Chainload \\EFI\\TOOLS\\second.efi\r\nQ  Return to firmware\r\n')
+    ## end
     local key: efi.Key
     local event = st.input.wait
     local index: usize
@@ -130,13 +138,24 @@ local function efi_main(image: pointer, st: *efi.System): usize <cexport, codena
     until status ~= 0x8000000000000006 -- EFI_NOT_READY
     if status ~= 0 then root.close(root); return status end
     if key.unicode == 49 then
+      ## if NEBOOT_CORE then
+      launch(image, st, root, volume_path, '\\boot\\vmlinuz',
+        'initrd=\\boot\\initramfs console=tty0 console=ttyS0,115200 rdinit=/init theseus.pid1=1')
+      ## else
       launch(image, st, root, volume_path, '\\boot\\vmlinuz',
         'initrd=\\boot\\initramfs console=tty0 console=ttyS0,115200 cascadia.live=1 theseus.pid1=1 theseus.openrc=1 theseus.supervisor_recovery_timeout=30')
+      ## end
     elseif key.unicode == 50 then
+      ## if NEBOOT_CORE then
+      launch(image, st, root, volume_path, '\\EFI\\TOOLS\\second.efi', nilptr)
+      ## else
       launch(image, st, root, volume_path, '\\boot\\vmlinuz',
         'initrd=\\boot\\initramfs console=tty0 console=ttyS0,115200 cascadia.live=1')
+      ## end
     elseif key.unicode == 51 then
+      ## if not NEBOOT_CORE then
       launch(image, st, root, volume_path, '\\EFI\\TOOLS\\second.efi', nilptr)
+      ## end
     elseif key.unicode == 113 or key.unicode == 81 or key.scan == 23 then
       return root.close(root)
     end

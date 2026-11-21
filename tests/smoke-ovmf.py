@@ -64,6 +64,28 @@ class Console:
             self.log.flush()
             self.pending += chunk
 
+    def wait_exit(self, seconds):
+        limit = time.monotonic() + seconds
+        while self.proc.poll() is None:
+            remaining = limit - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(f"{self.log.name}: QEMU did not power off")
+            if not self.selector.select(remaining):
+                continue
+            chunk = os.read(self.proc.stdout.fileno(), 65536)
+            if not chunk:
+                break
+            self.log.write(chunk)
+            self.log.flush()
+        code = self.proc.wait(timeout=max(1, limit - time.monotonic()))
+        while self.selector.select(0):
+            chunk = os.read(self.proc.stdout.fileno(), 65536)
+            if not chunk:
+                break
+            self.log.write(chunk)
+            self.log.flush()
+        return code
+
     def send(self, data):
         self.proc.stdin.write(data)
         self.proc.stdin.flush()
@@ -205,6 +227,41 @@ def exercise(args, root, code, nvram, recovery, preferred):
         print(f"PASS {name}: {preferred:#x} -> {actual:#x}, PID 1 {pid1.decode()}", flush=True)
 
 
+def exercise_core(args, root, code, nvram, preferred):
+    name = "core-positive"
+    disk = root / (name + ".img")
+    fat_disk(disk, args.esp)
+    if args.keep_disk:
+        args.keep_disk.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(disk, args.keep_disk)
+    with console(args, disk, nvram, code, name) as con:
+        report = con.expect(rb"neboot loaded 0x([0-9a-fA-F]+)\r?\n", args.timeout)
+        actual = int(report[1], 16)
+        if not actual or preferred == actual:
+            raise RuntimeError(f"{name}: expected firmware relocation, saw {preferred:#x} -> {actual:#x}")
+        con.expect(rb"Cascadia Core EFI menu", 30)
+        con.expect(rb"1  Boot Cascadia Core \(Theseus\)", 15)
+        con.expect(rb"2  Chainload", 15)
+        con.expect(rb"Q  Return to firmware", 15)
+        if b"OpenRC" in Path(con.log.name).read_bytes():
+            raise RuntimeError(f"{name}: Core menu unexpectedly exposes OpenRC")
+        con.send(b"1")
+        con.expect(rb"Starting \\boot\\vmlinuz", 30)
+        con.expect(rb"[$#] ", args.timeout)
+        con.send(b"printf '\\nCORE_PID1='; readlink /proc/1/exe; printf 'FOUNDATION='; the state of foundation; printf 'SERIAL_CONSOLE='; the state of serial-console\r")
+        con.expect(rb"CORE_PID1=/bin/theseus-init", 30)
+        con.expect(rb"FOUNDATION=RUNNING", 30)
+        con.expect(rb"SERIAL_CONSOLE=RUNNING", 30)
+        con.send(b"kill -USR2 1\r")
+        code = con.wait_exit(args.timeout)
+        transcript = con.log.name
+        data = Path(transcript).read_bytes()
+        if code != 0 or any(marker not in data for marker in (
+                b"TI1\tsupervisor-exit\t0\t0", b"TI1\tshutdown-ready", b"reboot: Power down")):
+            raise RuntimeError(f"{name}: expected orderly kernel poweroff (QEMU status {code}); see {transcript}")
+        print(f"PASS {name}: relocated EFI, Theseus PID 1, foundation and serial-console RUNNING, kernel poweroff", flush=True)
+
+
 def exercise_missing_boot_file(args, root, code, nvram, name, missing):
     disk = root / (name + ".img")
     fat_disk(disk, args.esp, omit=missing)
@@ -227,6 +284,8 @@ def main():
     parser.add_argument("--esp", required=True, type=Path, help="directory populated by make stage")
     parser.add_argument("--logs", type=Path, help="directory for the smoke test's serial transcripts")
     parser.add_argument("--interactive", action="store_true", help="run the menu on this terminal (Ctrl-A X exits QEMU)")
+    parser.add_argument("--core", action="store_true", help="test the opt-in Core-only EFI menu and orderly shutdown")
+    parser.add_argument("--keep-disk", type=Path, help="copy the generated GPT/FAT test disk to this path")
     parser.add_argument("--check-internet", action="store_true", help="verify HTTPS from the running Theseus guest")
     parser.add_argument("--qemu", default=os.environ.get("QEMU", "qemu-system-x86_64"))
     parser.add_argument("--ovmf-code", default=os.environ.get("OVMF_CODE"))
@@ -251,7 +310,9 @@ def main():
     print(f"OVMF {code}, {nvram}, acceleration {args.accel}", flush=True)
     with tempfile.TemporaryDirectory(prefix="neboot-ovmf-") as tmp:
         root = Path(tmp)
-        if args.interactive:
+        if args.core:
+            exercise_core(args, root, code, nvram, preferred_image_base(args.esp / PAYLOAD[0]))
+        elif args.interactive:
             disk = root / "menu.img"
             fat_disk(disk, args.esp)
             print("Press Ctrl-A X to exit QEMU.", flush=True)
