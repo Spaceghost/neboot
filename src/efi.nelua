@@ -1,0 +1,82 @@
+-- x86-64 UEFI types used by the loader. Reserved slots preserve the firmware layout.
+global efi = @record{}
+global efi.Key: type = @record{scan: uint16, unicode: uint16}
+global efi.Input: type = @record{
+  reset: pointer,
+  read: function<ms_abi>(pointer, *efi.Key): usize,
+  wait: pointer,
+}
+global efi.Output: type = @record{
+  reset: pointer,
+  write: function<ms_abi>(pointer, *uint16): usize,
+}
+global efi.Guid: type = @record{a: uint32, b: uint16, c: uint16, d: [8]uint8}
+global efi.Header: type = @record{signature: uint64, revision: uint32, size: uint32, crc: uint32, reserved: uint32}
+global efi.Services: type = @record{
+  header: efi.Header,
+  task_and_memory: [7]pointer,
+  create_event: pointer, set_timer: pointer,
+  wait: function<ms_abi>(usize, *pointer, *usize): usize,
+  event_and_protocol: [6]pointer,
+  handle: function<ms_abi>(pointer, *efi.Guid, *pointer): usize,
+  protocol_and_config: [5]pointer,
+  load: function<ms_abi>(uint8, pointer, pointer, pointer, usize, *pointer): usize,
+  start: function<ms_abi>(pointer, *usize, **uint16): usize,
+  exit_image: pointer,
+  unload: function<ms_abi>(pointer): usize,
+  exit_boot: pointer, tick: pointer, stall: pointer,
+  watchdog: function<ms_abi>(usize, uint64, usize, *uint16): usize,
+}
+global efi.System: type = @record{
+  header: efi.Header, vendor: *uint16, revision: uint32,
+  stdin_handle: pointer, input: *efi.Input, stdout_handle: pointer, output: *efi.Output,
+  stderr_handle: pointer, error_output: pointer, runtime: pointer, boot: *efi.Services,
+}
+global efi.Loaded: type = @record{
+  revision: uint32, parent: pointer, system: *efi.System, device: pointer,
+  file_path: pointer, reserved: pointer, options_size: uint32, options: pointer,
+  base: pointer, size: uint64, code_type: uint32, data_type: uint32, unload: pointer,
+}
+global efi.Volume: type = @record{
+  revision: uint64, open: function<ms_abi>(pointer, *pointer): usize,
+}
+global efi.File: type = @record{
+  revision: uint64,
+  open: function<ms_abi>(pointer, *pointer, *uint16, uint64, uint64): usize,
+  close: function<ms_abi>(pointer): usize,
+}
+global efi.loaded_guid: efi.Guid = {0x5b1b31a1,0x9562,0x11d2,{0x8e,0x3f,0,0xa0,0xc9,0x69,0x72,0x3b}}
+global efi.path_guid: efi.Guid = {0x09576e91,0x6d3f,0x11d2,{0x8e,0x39,0,0xa0,0xc9,0x69,0x72,0x3b}}
+global efi.volume_guid: efi.Guid = {0x964e5b22,0x6459,0x11d2,{0x8e,0x39,0,0xa0,0xc9,0x69,0x72,0x3b}}
+
+-- Encode the fixed ASCII menu and paths into the UTF-16 strings UEFI consumes.
+function efi.wide(dest: *[0]uint16, capacity: usize, source: cstring): usize
+  if capacity == 0 then return 0 end
+  local bytes = (@*[0]uint8)(source)
+  local i: usize = 0
+  while i + 1 < capacity and bytes[i] ~= 0 do
+    dest[i] = (@uint8)(bytes[i])
+    i = i + 1
+  end
+  dest[i] = 0
+  if bytes[i] ~= 0 then return 0 end
+  return i + 1
+end
+
+function efi.put(st: *efi.System, text: cstring)
+  local line: [256]uint16
+  if efi.wide(&line, #line, text) ~= 0 then
+    st.output.write(st.output, &line[0])
+  end
+end
+
+function efi.hex(st: *efi.System, n: uint64)
+  local s: [17]uint16
+  for i = 15, 0, -1 do
+    local digit = n & 15
+    s[i] = (@uint16)(digit < 10 and 48 + digit or 87 + digit)
+    n = n >> 4
+  end
+  s[16] = 0
+  st.output.write(st.output, &s[0])
+end

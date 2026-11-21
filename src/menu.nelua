@@ -1,0 +1,145 @@
+## pragmas.freestanding = true
+## pragmas.nochecks = true
+require 'efi'
+
+-- This initialized address occupies a DIR64 relocation in the EFI image.
+global neboot_banner: cstring <cexport, codename 'neboot_banner'> = 'Cascadia EFI menu\r\n'
+
+local BadImage: usize <comptime> = 0x8000000000000001
+local BadSize: usize <comptime> = 0x8000000000000004
+local function diagnostic(st: *efi.System, message: cstring, status: usize)
+  efi.put(st, message)
+  efi.put(st, ' (EFI status 0x')
+  efi.hex(st, status)
+  efi.put(st, ')\r\n')
+end
+
+local function loaded_image(st: *efi.System, handle: pointer): *efi.Loaded
+  local loaded: pointer = nilptr
+  if st.boot.handle(handle, &efi.loaded_guid, &loaded) ~= 0 then return nilptr end
+  return (@*efi.Loaded)(loaded)
+end
+
+local function check_file(st: *efi.System, root: *efi.File, path: cstring): boolean
+  local wide: [128]uint16
+  if efi.wide(&wide, #wide, path) == 0 then return false end
+  local file: pointer = nilptr
+  local status = root.open(root, &file, &wide[0], 1, 0)
+  if status ~= 0 then
+    efi.put(st, 'Cannot open ')
+    diagnostic(st, path, status)
+    return false
+  end
+  local opened = (@*efi.File)(file)
+  return opened.close(opened) == 0
+end
+
+-- Append one MEDIA_FILEPATH_DP and an end node to the boot volume's device path.
+-- All sizes include the node header and the UTF-16 string terminator.
+local function file_path(volume_path: *[0]uint8, name: cstring, dst: *[0]uint8, limit: usize): boolean
+  local pos: usize = 0
+  while pos + 4 <= limit do
+    local length = (@usize)(volume_path[pos+2]) | ((@usize)(volume_path[pos+3]) << 8)
+    if length < 4 or length > limit-pos then return false end
+    if volume_path[pos] == 0x7f then
+      if volume_path[pos+1] ~= 0xff or length ~= 4 then return false end
+      break
+    end
+    for i: usize = 0, < length do dst[pos+i] = volume_path[pos+i] end
+    pos = pos + length
+  end
+  local start = pos
+  local bytes = (@*[0]uint8)(name)
+  if pos + 10 > limit then return false end
+  pos = pos + 4
+  local i: usize = 0
+  repeat
+    if pos + 6 > limit then return false end
+    dst[pos] = (@uint8)(bytes[i])
+    dst[pos+1] = 0
+    pos = pos + 2
+    i = i + 1
+  until bytes[i-1] == 0
+  dst[start] = 4; dst[start+1] = 4
+  dst[start+2] = (@uint8)((pos-start) & 255)
+  dst[start+3] = (@uint8)((pos-start) >> 8)
+  dst[pos] = 0x7f; dst[pos+1] = 0xff; dst[pos+2] = 4; dst[pos+3] = 0
+  return true
+end
+
+local function launch(parent: pointer, st: *efi.System, root: *efi.File, volume_path: pointer,
+                      path: cstring, options: cstring)
+  if not check_file(st, root, path) then return end
+  if options ~= nilptr and not check_file(st, root, '\\boot\\initramfs') then return end
+  local device_path: [4096]uint8
+  if not file_path((@*[0]uint8)(volume_path), path, &device_path, #device_path) then
+    diagnostic(st, 'Invalid device path', BadSize)
+    return
+  end
+  local child: pointer = nilptr
+  local status = st.boot.load(0, parent, &device_path, nilptr, 0, &child)
+  if status ~= 0 then diagnostic(st, 'LoadImage failed', status); return end
+  local args: [256]uint16
+  if options ~= nilptr then
+    local loaded = loaded_image(st, child)
+    local count = efi.wide(&args, #args, options)
+    if loaded == nilptr or count == 0 then
+      st.boot.unload(child)
+      diagnostic(st, 'Cannot set kernel options', BadImage)
+      return
+    end
+    loaded.options = &args
+    loaded.options_size = (@uint32)(count*2)
+  end
+  efi.put(st, 'Starting ')
+  efi.put(st, path)
+  efi.put(st, '\r\n')
+  status = st.boot.start(child, nilptr, nilptr)
+  if status ~= 0 then diagnostic(st, 'StartImage returned', status) end
+end
+
+local function efi_main(image: pointer, st: *efi.System): usize <cexport, codename 'efi_main', ms_abi>
+  if st == nilptr or st.boot == nilptr or st.input == nilptr or st.output == nilptr then return BadImage end
+  local loaded = loaded_image(st, image)
+  if loaded == nilptr then return BadImage end
+  efi.put(st, 'neboot loaded 0x')
+  efi.hex(st, (@usize)(loaded.base))
+  efi.put(st, '\r\n')
+  local filesystem: pointer = nilptr
+  local volume_path: pointer = nilptr
+  local status = st.boot.handle(loaded.device, &efi.volume_guid, &filesystem)
+  if status ~= 0 then diagnostic(st, 'No filesystem', status); return status end
+  status = st.boot.handle(loaded.device, &efi.path_guid, &volume_path)
+  if status ~= 0 then diagnostic(st, 'No device path', status); return status end
+  local volume = (@*efi.Volume)(filesystem)
+  local root_ptr: pointer = nilptr
+  status = volume.open(volume, &root_ptr)
+  if status ~= 0 then diagnostic(st, 'Cannot open boot volume', status); return status end
+  local root = (@*efi.File)(root_ptr)
+  st.boot.watchdog(0, 0, 0, nilptr)
+  repeat
+    efi.put(st, neboot_banner)
+    efi.put(st, '1  Cascadia (Theseus)\r\n2  Cascadia (OpenRC recovery)\r\n3  Chainload \\EFI\\TOOLS\\second.efi\r\nQ  Return to firmware\r\n')
+    local key: efi.Key
+    local event = st.input.wait
+    local index: usize
+    repeat
+      status = st.boot.wait(1, &event, &index)
+      if status ~= 0 then root.close(root); return status end
+      status = st.input.read(st.input, &key)
+    until status ~= 0x8000000000000006 -- EFI_NOT_READY
+    if status ~= 0 then root.close(root); return status end
+    if key.unicode == 49 then
+      launch(image, st, root, volume_path, '\\boot\\vmlinuz',
+        'initrd=\\boot\\initramfs console=tty0 console=ttyS0,115200 cascadia.live=1 theseus.pid1=1 theseus.openrc=1 theseus.supervisor_recovery_timeout=30')
+    elseif key.unicode == 50 then
+      launch(image, st, root, volume_path, '\\boot\\vmlinuz',
+        'initrd=\\boot\\initramfs console=tty0 console=ttyS0,115200 cascadia.live=1')
+    elseif key.unicode == 51 then
+      launch(image, st, root, volume_path, '\\EFI\\TOOLS\\second.efi', nilptr)
+    elseif key.unicode == 113 or key.unicode == 81 or key.scan == 23 then
+      return root.close(root)
+    end
+  until false
+  return 0
+end

@@ -1,0 +1,20 @@
+x86-64 Cascadia UEFI proof, 2026-11-21
+cascadia 6f487d5af0efa4868cf0d5f5abb07aad1a984b6b
+nebox 603b6d02e2d1660d6b37b96a9fc8e0055cece271
+nelibc e98cae6a8d998cfc91c14a0d268c1f510fcf1461
+nelua d5be57955fe8551934db403e5faed3852536ab7a
+theseus-init dae61196a9f6eea74366984720db9fb558a2f2ba
+d3e36b64e385aab83861f84776f4005c267f6c0651ffe7a6cf441cf4bfaed93a  cascadia-native-x86_64.iso
+
+15051681eca98e0569ad4561656913880d34411919489b0bbd7f809f4b4f0477  EFI/BOOT/BOOTX64.EFI
+c81c8fbc2f59f62a62b263fa7c2f7a7c0db185a7e70118a309214a5d32f5014e  EFI/TOOLS/second.efi
+ebdba905d6a2e25593a9fa5537646a9c214608083ad7c0096869f778543d788e  boot/vmlinuz
+9d9d11d216c09b5626a737fe8adf65d0ad1e2e6077f5f17c1a32811d917f26eb  boot/initramfs
+OVMF /usr/share/OVMF/OVMF_CODE.fd, /usr/share/OVMF/OVMF_VARS.fd, acceleration kvm
+PASS guest HTTPS example.com status 200
+PASS theseus-chainload: 0x100000000 -> 0x3e2fb000, PID 1 theseus-init
+PASS openrc-missing: 0x100000000 -> 0x3e2fb000, PID 1 openrc-init
+
+Serial console excerpts
+neboot child EFI application ran
+Cannot open \EFI\TOOLS\second.efi (EFI status 0x800000000000000e)

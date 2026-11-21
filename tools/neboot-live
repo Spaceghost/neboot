@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1-}" in
+    -h|--help)
+        echo 'Usage: neboot-live'
+        echo 'Build the latest neboot and start the latest Cascadia live image in OVMF.'
+        echo 'NEBOOT_TOOLCHAIN_ENV optionally selects a Bash file with the toolchain environment.'
+        exit 0 ;;
+esac
+if (( $# )); then echo 'Usage: neboot-live' >&2; exit 2; fi
+
+if [[ -n ${NEBOOT_TOOLCHAIN_ENV:-} ]]; then source "$NEBOOT_TOOLCHAIN_ENV"; fi
+work=$(mktemp -d "${TMPDIR:-/tmp}/neboot-live.XXXXXXXX")
+trap 'rm -rf -- "$work"' EXIT
+echo 'Fetching neboot for the UEFI menu.' >&2
+git clone --quiet --depth 1 --no-tags https://github.com/Spaceghost/neboot.git "$work/src"
+echo "Building neboot $(git -C "$work/src" rev-parse --short HEAD) as $(id -un)." >&2
+make -C "$work/src" run-live

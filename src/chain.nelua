@@ -1,0 +1,8 @@
+## pragmas.freestanding = true
+## pragmas.nochecks = true
+require 'efi'
+
+local function efi_main(image: pointer, st: *efi.System): usize <cexport, codename 'efi_main', ms_abi>
+  efi.put(st, 'neboot child EFI application ran\r\n')
+  return 0
+end
