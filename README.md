@@ -30,13 +30,34 @@ disk. Use `QEMU_ACCEL=tcg` on a host without KVM.
 
 ## Build the applications
 
-`make` writes `build/BOOTX64.EFI` and `build/second.efi`. The compiler and
-linker are selected with `NELUA`, `NECC` and `NELINKER`. Set `NECC_SYSROOT`
-to the staged necc SDK if it is installed outside necc's default location.
+`make` writes `build/BOOTX64.EFI` and `build/second.efi` through the
+reproducible C emission path. The compiler and linker are selected with
+`NELUA`, `NECC` and `NELINKER`.
 
 1. The [Nelua fork](https://github.com/Spaceghost/nelua/commit/d5be57955fe8551934db403e5faed3852536ab7a) emits freestanding C with `ms_abi` on the entry point and firmware function types.
 2. [necc](https://github.com/Spaceghost/necc/commit/96de5c958caaf9774ab3b4452b65cdd7812f61dc) compiles that source to x86-64 ELF relocatable objects. Its SDK supplies TinyCC for preprocessing and assembly.
 3. [nelinker](https://github.com/Spaceghost/nelinker/commit/55202d63a6e8e3982f36e90c409c272181f6a9de) links the objects as PE32+ EFI applications with `efi_main` as the entry point.
+
+### Native necc backend
+
+`make native` compiles the Nelua sources directly with necc's x86-64 backend
+and links the resulting ELF objects into the same EFI applications. It writes
+`build/native/BOOTX64.EFI` and `build/native/second.efi`. Use a current full
+necc frontend SDK whose Nelua modules understand the `ms_abi` firmware
+function types in `src/efi.nelua`, and a nelinker build with PE32+ EFI
+support. The verified tool revisions were necc `8bacb93`, Nelua `5995eba5`
+and nelinker `0c27372`. The SDK path is selected with `NECC_SYSROOT`.
+
+To stage and boot these outputs, run `make stage-native` or
+`make run-live-native`. The latter prepares the live image, stages the EFI
+applications, and runs the same OVMF menu audit as `run-live`.
+
+```sh
+export NECC_SYSROOT=/path/to/native-necc-sdk
+make native NECC=/path/to/necc NELINKER=/path/to/nelinker
+cmp build/BOOTX64.EFI build/native/BOOTX64.EFI
+cmp build/second.efi build/native/second.efi
+```
 
 The loader uses firmware console, filesystem, loaded-image and device-path
 protocols. It opens the selected files before starting an image. For the Linux
