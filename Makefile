@@ -95,3 +95,39 @@ run-live-native: native
 	iso="$(ISO)"; if [ -z "$$iso" ]; then iso=$$(cascadia-live --prepare) || exit; fi; \
 	$(MAKE) stage-iso-native ISO="$$iso" && \
 	python3 tests/smoke-ovmf.py --esp "$(ESP)" --interactive
+
+ARM64_OUT ?= $(OUT)/aarch64
+CLANG ?= clang
+LLD_LINK ?= lld-link
+
+.PHONY: arm64
+arm64: $(ARM64_OUT)/BOOTAA64.EFI $(ARM64_OUT)/second.efi
+
+$(ARM64_OUT):
+	mkdir -p "$@"
+
+$(ARM64_OUT)/%.c: src/%.nelua src/efi.nelua Makefile | $(ARM64_OUT)
+	$(NELUA) -L src --cc "$(CLANG)" --target aarch64-none-elf \
+		--cflags=-ffreestanding --define NEBOOT_ARM64=true --print-code "$<" > "$@"
+
+$(ARM64_OUT)/%.obj: $(ARM64_OUT)/%.c
+	$(CLANG) --target=aarch64-windows-msvc -O2 -ffreestanding -fno-builtin \
+		-fno-stack-protector -mno-stack-arg-probe -c "$<" -o "$@"
+
+$(ARM64_OUT)/BOOTAA64.EFI: $(ARM64_OUT)/menu.obj Makefile
+	$(LLD_LINK) /machine:arm64 /subsystem:efi_application /entry:efi_main \
+		/nodefaultlib /base:0x100000000 /out:"$@" "$<"
+
+$(ARM64_OUT)/second.efi: $(ARM64_OUT)/chain.obj Makefile
+	$(LLD_LINK) /machine:arm64 /subsystem:efi_application /entry:efi_main \
+		/nodefaultlib /out:"$@" "$<"
+
+ARM64_ESP ?= $(ARM64_OUT)/esp
+
+.PHONY: stage-arm64 smoke-arm64
+stage-arm64: arm64
+	install -Dm644 "$(ARM64_OUT)/BOOTAA64.EFI" "$(ARM64_ESP)/EFI/BOOT/BOOTAA64.EFI"
+	install -Dm644 "$(ARM64_OUT)/second.efi" "$(ARM64_ESP)/EFI/TOOLS/second.efi"
+
+smoke-arm64: stage-arm64
+	python3 tests/smoke-ovmf.py --arm64-menu --esp "$(ARM64_ESP)" --logs "$(ARM64_OUT)/logs"

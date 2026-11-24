@@ -9,6 +9,8 @@ global neboot_banner: cstring <cexport, codename 'neboot_banner'> = 'Cascadia Co
 global neboot_banner: cstring <cexport, codename 'neboot_banner'> = 'Cascadia EFI menu\r\n'
 ## end
 
+## local serial_console = NEBOOT_ARM64 and 'ttyAMA0' or 'ttyS0'
+
 local BadImage: usize <comptime> = 0x8000000000000001
 local BadSize: usize <comptime> = 0x8000000000000004
 local function diagnostic(st: *efi.System, message: cstring, status: usize)
@@ -75,7 +77,7 @@ local function launch(parent: pointer, st: *efi.System, root: *efi.File, volume_
                       path: cstring, options: cstring)
   if not check_file(st, root, path) then return end
   if options ~= nilptr and not check_file(st, root, '\\boot\\initramfs') then return end
-  local device_path: [4096]uint8
+  local device_path: [4096]uint8 <noinit>
   if not file_path((@*[0]uint8)(volume_path), path, &device_path, #device_path) then
     diagnostic(st, 'Invalid device path', BadSize)
     return
@@ -102,7 +104,7 @@ local function launch(parent: pointer, st: *efi.System, root: *efi.File, volume_
   if status ~= 0 then diagnostic(st, 'StartImage returned', status) end
 end
 
-local function efi_main(image: pointer, st: *efi.System): usize <cexport, codename 'efi_main', ms_abi>
+local function run_menu(image: pointer, st: *efi.System): usize
   if st == nilptr or st.boot == nilptr or st.input == nilptr or st.output == nilptr then return BadImage end
   local loaded = loaded_image(st, image)
   if loaded == nilptr then return BadImage end
@@ -140,17 +142,17 @@ local function efi_main(image: pointer, st: *efi.System): usize <cexport, codena
     if key.unicode == 49 then
       ## if NEBOOT_CORE then
       launch(image, st, root, volume_path, '\\boot\\vmlinuz',
-        'initrd=\\boot\\initramfs console=tty0 console=ttyS0,115200 rdinit=/init theseus.pid1=1')
+        #['initrd=\\boot\\initramfs console=tty0 console=' .. serial_console .. ',115200 rdinit=/init theseus.pid1=1']#)
       ## else
       launch(image, st, root, volume_path, '\\boot\\vmlinuz',
-        'initrd=\\boot\\initramfs console=tty0 console=ttyS0,115200 cascadia.live=1 theseus.pid1=1 theseus.openrc=1 theseus.supervisor_recovery_timeout=30')
+        #['initrd=\\boot\\initramfs console=tty0 console=' .. serial_console .. ',115200 cascadia.live=1 theseus.pid1=1 theseus.openrc=1 theseus.supervisor_recovery_timeout=30']#)
       ## end
     elseif key.unicode == 50 then
       ## if NEBOOT_CORE then
       launch(image, st, root, volume_path, '\\EFI\\TOOLS\\second.efi', nilptr)
       ## else
       launch(image, st, root, volume_path, '\\boot\\vmlinuz',
-        'initrd=\\boot\\initramfs console=tty0 console=ttyS0,115200 cascadia.live=1')
+        #['initrd=\\boot\\initramfs console=tty0 console=' .. serial_console .. ',115200 cascadia.live=1']#)
       ## end
     elseif key.unicode == 51 then
       ## if not NEBOOT_CORE then
@@ -162,3 +164,13 @@ local function efi_main(image: pointer, st: *efi.System): usize <cexport, codena
   until false
   return 0
 end
+
+## if NEBOOT_ARM64 then
+local function efi_main(image: pointer, st: *efi.System): usize <cexport, codename 'efi_main'>
+  return run_menu(image, st)
+end
+## else
+local function efi_main(image: pointer, st: *efi.System): usize <cexport, codename 'efi_main', ms_abi>
+  return run_menu(image, st)
+end
+## end

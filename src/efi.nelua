@@ -1,31 +1,57 @@
--- x86-64 UEFI types used by the loader. Reserved slots preserve the firmware layout.
+-- 64-bit UEFI types used by the loader. Reserved slots preserve the firmware layout.
 global efi = @record{}
 global efi.Key: type = @record{scan: uint16, unicode: uint16}
+global efi.Guid: type = @record{a: uint32, b: uint16, c: uint16, d: [8]uint8}
+## if NEBOOT_ARM64 then
+local EfiRead: type = @function(pointer, *efi.Key): usize
+local EfiWrite: type = @function(pointer, *uint16): usize
+local EfiWait: type = @function(usize, *pointer, *usize): usize
+local EfiHandle: type = @function(pointer, *efi.Guid, *pointer): usize
+local EfiLoad: type = @function(uint8, pointer, pointer, pointer, usize, *pointer): usize
+local EfiStart: type = @function(pointer, *usize, **uint16): usize
+local EfiUnload: type = @function(pointer): usize
+local EfiWatchdog: type = @function(usize, uint64, usize, *uint16): usize
+local EfiOpenVolume: type = @function(pointer, *pointer): usize
+local EfiOpen: type = @function(pointer, *pointer, *uint16, uint64, uint64): usize
+local EfiClose: type = @function(pointer): usize
+## else
+local EfiRead: type = @function<ms_abi>(pointer, *efi.Key): usize
+local EfiWrite: type = @function<ms_abi>(pointer, *uint16): usize
+local EfiWait: type = @function<ms_abi>(usize, *pointer, *usize): usize
+local EfiHandle: type = @function<ms_abi>(pointer, *efi.Guid, *pointer): usize
+local EfiLoad: type = @function<ms_abi>(uint8, pointer, pointer, pointer, usize, *pointer): usize
+local EfiStart: type = @function<ms_abi>(pointer, *usize, **uint16): usize
+local EfiUnload: type = @function<ms_abi>(pointer): usize
+local EfiWatchdog: type = @function<ms_abi>(usize, uint64, usize, *uint16): usize
+local EfiOpenVolume: type = @function<ms_abi>(pointer, *pointer): usize
+local EfiOpen: type = @function<ms_abi>(pointer, *pointer, *uint16, uint64, uint64): usize
+local EfiClose: type = @function<ms_abi>(pointer): usize
+## end
+
 global efi.Input: type = @record{
   reset: pointer,
-  read: function<ms_abi>(pointer, *efi.Key): usize,
+  read: EfiRead,
   wait: pointer,
 }
 global efi.Output: type = @record{
   reset: pointer,
-  write: function<ms_abi>(pointer, *uint16): usize,
+  write: EfiWrite,
 }
-global efi.Guid: type = @record{a: uint32, b: uint16, c: uint16, d: [8]uint8}
 global efi.Header: type = @record{signature: uint64, revision: uint32, size: uint32, crc: uint32, reserved: uint32}
 global efi.Services: type = @record{
   header: efi.Header,
   task_and_memory: [7]pointer,
   create_event: pointer, set_timer: pointer,
-  wait: function<ms_abi>(usize, *pointer, *usize): usize,
+  wait: EfiWait,
   event_and_protocol: [6]pointer,
-  handle: function<ms_abi>(pointer, *efi.Guid, *pointer): usize,
+  handle: EfiHandle,
   protocol_and_config: [5]pointer,
-  load: function<ms_abi>(uint8, pointer, pointer, pointer, usize, *pointer): usize,
-  start: function<ms_abi>(pointer, *usize, **uint16): usize,
+  load: EfiLoad,
+  start: EfiStart,
   exit_image: pointer,
-  unload: function<ms_abi>(pointer): usize,
+  unload: EfiUnload,
   exit_boot: pointer, tick: pointer, stall: pointer,
-  watchdog: function<ms_abi>(usize, uint64, usize, *uint16): usize,
+  watchdog: EfiWatchdog,
 }
 global efi.System: type = @record{
   header: efi.Header, vendor: *uint16, revision: uint32,
@@ -38,12 +64,12 @@ global efi.Loaded: type = @record{
   base: pointer, size: uint64, code_type: uint32, data_type: uint32, unload: pointer,
 }
 global efi.Volume: type = @record{
-  revision: uint64, open: function<ms_abi>(pointer, *pointer): usize,
+  revision: uint64, open: EfiOpenVolume,
 }
 global efi.File: type = @record{
   revision: uint64,
-  open: function<ms_abi>(pointer, *pointer, *uint16, uint64, uint64): usize,
-  close: function<ms_abi>(pointer): usize,
+  open: EfiOpen,
+  close: EfiClose,
 }
 global efi.loaded_guid: efi.Guid = {0x5b1b31a1,0x9562,0x11d2,{0x8e,0x3f,0,0xa0,0xc9,0x69,0x72,0x3b}}
 global efi.path_guid: efi.Guid = {0x09576e91,0x6d3f,0x11d2,{0x8e,0x39,0,0xa0,0xc9,0x69,0x72,0x3b}}

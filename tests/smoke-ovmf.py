@@ -17,10 +17,11 @@ CHILD = "EFI/TOOLS/second.efi"
 KERNEL = "boot/vmlinuz"
 INITRAMFS = "boot/initramfs"
 PAYLOAD = ("EFI/BOOT/BOOTX64.EFI", CHILD, KERNEL, INITRAMFS)
+ARM64_PAYLOAD = ("EFI/BOOT/BOOTAA64.EFI", CHILD)
 
 
-def fat_disk(path, esp, omit=None):
-    files = [name for name in PAYLOAD if name != omit]
+def fat_disk(path, esp, omit=None, payload=PAYLOAD):
+    files = [name for name in payload if name != omit]
     payload_size = sum((esp / name).stat().st_size for name in files)
     mib = 1024 * 1024
     part_size = max(64, (payload_size + 8 * mib + mib - 1) // mib) * mib
@@ -121,6 +122,13 @@ def drive(path, interface, readonly=False):
 def command(args, disk, vars_template, code, name):
     nvram = disk.parent / (name + vars_template.suffix)
     shutil.copyfile(vars_template, nvram)
+    if args.arm64_menu:
+        return [args.qemu, "-nodefaults", "-machine", "virt", "-accel", "tcg",
+                "-cpu", "cortex-a57", "-m", "1024", "-no-reboot",
+                "-display", "none", "-monitor", "none", "-serial", "stdio",
+                "-drive", drive(code, "pflash", True), "-drive", drive(nvram, "pflash"),
+                "-drive", drive(disk, "none") + ",id=esp",
+                "-device", "virtio-blk-pci,drive=esp,bootindex=1"]
     return [args.qemu, "-nodefaults", "-machine", "q35", "-accel", args.accel,
            "-cpu", "host" if args.accel == "kvm" else "max", "-m", "2048" if args.interactive else "1024", "-no-reboot",
            "-display", "none", "-monitor", "none", "-serial", "mon:stdio" if args.interactive else "stdio",
@@ -151,13 +159,13 @@ def console(args, disk, vars_template, code, name):
             proc.stdout.close()
 
 
-def preferred_image_base(path):
+def preferred_image_base(path, machine=0x8664):
     # Firmware may update ImageBase in its in-memory PE header. Use the
     # original PE32+ file and check that the loader contains a DIR64 fixup.
     image = path.read_bytes()
     pe, = struct.unpack_from("<I", image, 0x3c)
-    if image[:2] != b"MZ" or image[pe:pe + 6] != b"PE\0\0\x64\x86":
-        raise ValueError(f"{path}: expected an AMD64 PE boot image")
+    if image[:2] != b"MZ" or image[pe:pe + 6] != b"PE\0\0" + struct.pack("<H", machine):
+        raise ValueError(f"{path}: expected PE machine {machine:#x}")
     count, = struct.unpack_from("<H", image, pe + 6)
     optlen, = struct.unpack_from("<H", image, pe + 20)
     opt = pe + 24
@@ -279,15 +287,38 @@ def exercise_missing_boot_file(args, root, code, nvram, name, missing):
               "child EFI ran and returned to menu", flush=True)
 
 
+def exercise_arm64_menu(args, root, code, nvram):
+    preferred = preferred_image_base(args.esp / ARM64_PAYLOAD[0], 0xaa64)
+    disk = root / "aarch64-menu.img"
+    fat_disk(disk, args.esp, payload=ARM64_PAYLOAD)
+    if args.keep_disk:
+        args.keep_disk.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(disk, args.keep_disk)
+    with console(args, disk, nvram, code, "aarch64-menu") as con:
+        loaded = con.expect(rb"neboot loaded 0x([0-9a-fA-F]+)\r?\n", args.timeout)
+        actual = int(loaded[1], 16)
+        if not actual or actual == preferred:
+            raise RuntimeError(f"expected EFI relocation, saw {preferred:#x} -> {actual:#x}")
+        con.menu(15)
+        con.send(b"1")
+        con.expect_missing(KERNEL)
+        con.menu(15)
+        con.send(b"3")
+        con.expect(rb"neboot child EFI application ran", 30)
+        con.menu(15)
+        print(f"PASS AArch64 EFI relocation {preferred:#x} -> {actual:#x}, missing kernel, child and menu return", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--esp", required=True, type=Path, help="directory populated by make stage")
     parser.add_argument("--logs", type=Path, help="directory for the smoke test's serial transcripts")
     parser.add_argument("--interactive", action="store_true", help="run the menu on this terminal (Ctrl-A X exits QEMU)")
+    parser.add_argument("--arm64-menu", action="store_true", help="test the AArch64 EFI menu and chainloader in QEMU TCG")
     parser.add_argument("--core", action="store_true", help="test the opt-in Core-only EFI menu and orderly shutdown")
     parser.add_argument("--keep-disk", type=Path, help="copy the generated GPT/FAT test disk to this path")
     parser.add_argument("--check-internet", action="store_true", help="verify HTTPS from the running Theseus guest")
-    parser.add_argument("--qemu", default=os.environ.get("QEMU", "qemu-system-x86_64"))
+    parser.add_argument("--qemu", default=os.environ.get("QEMU"))
     parser.add_argument("--ovmf-code", default=os.environ.get("OVMF_CODE"))
     parser.add_argument("--ovmf-vars", default=os.environ.get("OVMF_VARS"))
     parser.add_argument("--accel", choices=("kvm", "tcg"), default=os.environ.get("QEMU_ACCEL") or
@@ -296,12 +327,27 @@ def main():
     args = parser.parse_args()
     if args.interactive and args.check_internet:
         parser.error("For the automated HTTPS check, replace --interactive with --logs DIR --check-internet")
-    code, nvram = firmware_paths(args.ovmf_code, args.ovmf_vars)
+    if args.arm64_menu:
+        if args.core or args.interactive or args.check_internet:
+            parser.error("--arm64-menu is an automated firmware-only test")
+        args.qemu = args.qemu or "qemu-system-aarch64"
+        args.accel = "tcg"
+        if not args.ovmf_code and not args.ovmf_vars:
+            base = Path("/usr/share/edk2/aarch64")
+            args.ovmf_code = base / "QEMU_EFI-pflash.raw"
+            args.ovmf_vars = base / "vars-template-pflash.raw"
+        if not args.ovmf_code or not args.ovmf_vars:
+            parser.error("supply both AArch64 firmware and vars paths")
+        code = Path(args.ovmf_code).resolve(strict=True)
+        nvram = Path(args.ovmf_vars).resolve(strict=True)
+    else:
+        args.qemu = args.qemu or "qemu-system-x86_64"
+        code, nvram = firmware_paths(args.ovmf_code, args.ovmf_vars)
     if not args.interactive:
         if args.logs is None:
             parser.error("--logs is required for smoke tests")
         args.logs.mkdir(parents=True, exist_ok=True)
-    for filename in PAYLOAD:
+    for filename in (ARM64_PAYLOAD if args.arm64_menu else PAYLOAD):
         with (args.esp / filename).open("rb") as f:
             digest = hashlib.sha256()
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -310,7 +356,9 @@ def main():
     print(f"OVMF {code}, {nvram}, acceleration {args.accel}", flush=True)
     with tempfile.TemporaryDirectory(prefix="neboot-ovmf-") as tmp:
         root = Path(tmp)
-        if args.core:
+        if args.arm64_menu:
+            exercise_arm64_menu(args, root, code, nvram)
+        elif args.core:
             exercise_core(args, root, code, nvram, preferred_image_base(args.esp / PAYLOAD[0]))
         elif args.interactive:
             disk = root / "menu.img"

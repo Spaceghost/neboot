@@ -2,7 +2,17 @@
 ## pragmas.nochecks = true
 require 'efi'
 
-local function efi_main(image: pointer, st: *efi.System): usize <cexport, codename 'efi_main', ms_abi>
+local function run_child(st: *efi.System): usize
   efi.put(st, 'neboot child EFI application ran\r\n')
   return 0
 end
+
+## if NEBOOT_ARM64 then
+local function efi_main(image: pointer, st: *efi.System): usize <cexport, codename 'efi_main'>
+  return run_child(st)
+end
+## else
+local function efi_main(image: pointer, st: *efi.System): usize <cexport, codename 'efi_main', ms_abi>
+  return run_child(st)
+end
+## end

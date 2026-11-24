@@ -5,6 +5,34 @@ Choose **1** for Theseus, **2** for OpenRC recovery, or **3** to start a second
 EFI application. A missing file produces a firmware status and returns you to
 the menu. **Q** returns to firmware.
 
+## AArch64 UEFI
+
+With the Spaceghost Nelua compiler, Clang, and `lld-link` available, build and
+stage the AArch64 EFI applications:
+
+```sh
+make stage-arm64 NELUA=/path/to/nelua
+```
+
+The staged applications are `build/aarch64/esp/EFI/BOOT/BOOTAA64.EFI` and
+`build/aarch64/esp/EFI/TOOLS/second.efi`. The ARM build uses Clang’s AArch64
+COFF target and links with `lld-link`. Its Linux boot options use the
+`ttyAMA0` serial console on QEMU virt.
+
+For a firmware test on Fedora Incus, install `qemu-system-aarch64-core`,
+`edk2-aarch64`, `mtools`, `util-linux`, and Python 3. Then run:
+
+```sh
+make smoke-arm64 NELUA=/path/to/nelua
+```
+
+The smoke builds a temporary GPT/FAT disk, boots it with QEMU TCG, and
+checks firmware relocation, the missing-kernel diagnostic, and child
+chainloading back to the menu. If firmware is installed elsewhere, set
+`OVMF_CODE` and `OVMF_VARS` to a matching AArch64 pflash pair. The ARM
+Cascadia kernel and initramfs boot path still needs an integration test.
+
+
 ## Run in QEMU
 
 With the toolchain below on PATH and the Cascadia live launcher installed, run:
