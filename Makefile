@@ -153,3 +153,40 @@ smoke-arm64-linux: arm64 $(ARM64_OUT)/test-initramfs
 		KERNEL="$(KERNEL)" INITRD="$(ARM64_OUT)/test-initramfs"
 	python3 tests/smoke-ovmf.py --arm64-linux --esp "$(ARM64_LINUX_TEST_ESP)" \
 		--logs "$(ARM64_OUT)/logs"
+
+ARM64_NELINKER_OUT ?= $(OUT)/aarch64-nelinker
+ARM64_NELINKER_ESP ?= $(ARM64_NELINKER_OUT)/esp
+ARM64_NELINKER_TEST_ESP ?= $(ARM64_NELINKER_OUT)/linux-test-esp
+
+.PHONY: arm64-nelinker stage-arm64-nelinker smoke-arm64-nelinker smoke-arm64-nelinker-linux
+arm64-nelinker: $(ARM64_NELINKER_OUT)/BOOTAA64.EFI $(ARM64_NELINKER_OUT)/second.efi
+
+$(ARM64_NELINKER_OUT):
+	mkdir -p "$@"
+
+$(ARM64_NELINKER_OUT)/%.o: $(ARM64_OUT)/%.c Makefile | $(ARM64_NELINKER_OUT)
+	$(CLANG) --target=aarch64-none-elf -O2 -ffreestanding -fno-builtin \
+		-fno-stack-protector -fno-pic -fno-unwind-tables -fno-asynchronous-unwind-tables \
+		-c "$<" -o "$@"
+
+$(ARM64_NELINKER_OUT)/BOOTAA64.EFI: $(ARM64_NELINKER_OUT)/menu.o Makefile
+	$(NELINKER) --aarch64 --efi-app --image-base 0x100000000 -o "$@" "$<"
+
+$(ARM64_NELINKER_OUT)/second.efi: $(ARM64_NELINKER_OUT)/chain.o Makefile
+	$(NELINKER) --aarch64 --efi-app -o "$@" "$<"
+
+stage-arm64-nelinker: arm64-nelinker
+	install -Dm644 "$(ARM64_NELINKER_OUT)/BOOTAA64.EFI" "$(ARM64_NELINKER_ESP)/EFI/BOOT/BOOTAA64.EFI"
+	install -Dm644 "$(ARM64_NELINKER_OUT)/second.efi" "$(ARM64_NELINKER_ESP)/EFI/TOOLS/second.efi"
+
+smoke-arm64-nelinker: stage-arm64-nelinker
+	python3 tests/smoke-ovmf.py --arm64-menu --esp "$(ARM64_NELINKER_ESP)" \
+		--logs "$(ARM64_NELINKER_OUT)/logs"
+
+smoke-arm64-nelinker-linux: arm64-nelinker $(ARM64_OUT)/test-initramfs
+	@test -n "$(KERNEL)" && test -f "$(KERNEL)"
+	$(MAKE) stage-arm64-nelinker ARM64_NELINKER_ESP="$(ARM64_NELINKER_TEST_ESP)"
+	install -Dm644 "$(KERNEL)" "$(ARM64_NELINKER_TEST_ESP)/boot/vmlinuz"
+	install -Dm644 "$(ARM64_OUT)/test-initramfs" "$(ARM64_NELINKER_TEST_ESP)/boot/initramfs"
+	python3 tests/smoke-ovmf.py --arm64-linux --esp "$(ARM64_NELINKER_TEST_ESP)" \
+		--logs "$(ARM64_NELINKER_OUT)/logs"

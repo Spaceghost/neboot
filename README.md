@@ -45,6 +45,20 @@ kernel and initramfs, use `make stage-arm64-linux KERNEL=... INITRD=...`.
 The ARM Cascadia and Theseus boot path still needs an integration test.
 
 
+### Link the AArch64 EFI applications with Nelinker
+
+Use an AArch64-capable build of [Nelinker](https://nelua.tech/nelinker/#aarch64).
+This variant compiles the same Nelua sources to ELF objects with Clang and
+links both PE32+ images with Nelinker. It stages the EFI files under
+`build/aarch64-nelinker/esp`.
+
+```sh
+make smoke-arm64-nelinker NELUA=/path/to/nelua NELINKER=/path/to/nelinker
+make smoke-arm64-nelinker-linux NELUA=/path/to/nelua NELINKER=/path/to/nelinker \
+  KERNEL=/path/to/arm64/vmlinuz
+```
+
+
 ## Run in QEMU
 
 With the toolchain below on PATH and the Cascadia live launcher installed, run:
