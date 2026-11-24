@@ -122,7 +122,7 @@ def drive(path, interface, readonly=False):
 def command(args, disk, vars_template, code, name):
     nvram = disk.parent / (name + vars_template.suffix)
     shutil.copyfile(vars_template, nvram)
-    if args.arm64_menu:
+    if args.arm64_menu or args.arm64_linux:
         return [args.qemu, "-nodefaults", "-machine", "virt", "-accel", "tcg",
                 "-cpu", "cortex-a57", "-m", "1024", "-no-reboot",
                 "-display", "none", "-monitor", "none", "-serial", "stdio",
@@ -309,12 +309,36 @@ def exercise_arm64_menu(args, root, code, nvram):
         print(f"PASS AArch64 EFI relocation {preferred:#x} -> {actual:#x}, missing kernel, child and menu return", flush=True)
 
 
+def exercise_arm64_linux(args, root, code, nvram):
+    preferred = preferred_image_base(args.esp / ARM64_PAYLOAD[0], 0xaa64)
+    disk = root / "aarch64-linux.img"
+    fat_disk(disk, args.esp, payload=ARM64_PAYLOAD + (KERNEL, INITRAMFS))
+    if args.keep_disk:
+        args.keep_disk.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(disk, args.keep_disk)
+    with console(args, disk, nvram, code, "aarch64-linux") as con:
+        loaded = con.expect(rb"neboot loaded 0x([0-9a-fA-F]+)\r?\n", args.timeout)
+        actual = int(loaded[1], 16)
+        if not actual or actual == preferred:
+            raise RuntimeError(f"expected EFI relocation, saw {preferred:#x} -> {actual:#x}")
+        con.menu(15)
+        con.send(b"1")
+        con.expect(rb"Starting \\boot\\vmlinuz", 30)
+        con.expect(rb"NEBOOT_ARM64_PID1=1\r?\n", args.timeout)
+        con.expect(rb"reboot: Power down", args.timeout)
+        if con.wait_exit(args.timeout):
+            raise RuntimeError("AArch64 Linux guest did not power off cleanly")
+        print(f"PASS AArch64 EFI relocation {preferred:#x} -> {actual:#x}, Linux PID 1 and poweroff", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--esp", required=True, type=Path, help="directory populated by make stage")
     parser.add_argument("--logs", type=Path, help="directory for the smoke test's serial transcripts")
     parser.add_argument("--interactive", action="store_true", help="run the menu on this terminal (Ctrl-A X exits QEMU)")
-    parser.add_argument("--arm64-menu", action="store_true", help="test the AArch64 EFI menu and chainloader in QEMU TCG")
+    arm64 = parser.add_mutually_exclusive_group()
+    arm64.add_argument("--arm64-menu", action="store_true", help="test the AArch64 EFI menu and chainloader in QEMU TCG")
+    arm64.add_argument("--arm64-linux", action="store_true", help="boot an AArch64 EFI-stub kernel with the test initramfs")
     parser.add_argument("--core", action="store_true", help="test the opt-in Core-only EFI menu and orderly shutdown")
     parser.add_argument("--keep-disk", type=Path, help="copy the generated GPT/FAT test disk to this path")
     parser.add_argument("--check-internet", action="store_true", help="verify HTTPS from the running Theseus guest")
@@ -327,9 +351,9 @@ def main():
     args = parser.parse_args()
     if args.interactive and args.check_internet:
         parser.error("For the automated HTTPS check, replace --interactive with --logs DIR --check-internet")
-    if args.arm64_menu:
+    if args.arm64_menu or args.arm64_linux:
         if args.core or args.interactive or args.check_internet:
-            parser.error("--arm64-menu is an automated firmware-only test")
+            parser.error("AArch64 modes are automated QEMU TCG tests")
         args.qemu = args.qemu or "qemu-system-aarch64"
         args.accel = "tcg"
         if not args.ovmf_code and not args.ovmf_vars:
@@ -347,7 +371,10 @@ def main():
         if args.logs is None:
             parser.error("--logs is required for smoke tests")
         args.logs.mkdir(parents=True, exist_ok=True)
-    for filename in (ARM64_PAYLOAD if args.arm64_menu else PAYLOAD):
+    payload = ARM64_PAYLOAD if args.arm64_menu else PAYLOAD
+    if args.arm64_linux:
+        payload = ARM64_PAYLOAD + (KERNEL, INITRAMFS)
+    for filename in payload:
         with (args.esp / filename).open("rb") as f:
             digest = hashlib.sha256()
             for chunk in iter(lambda: f.read(1024 * 1024), b""):
@@ -356,7 +383,9 @@ def main():
     print(f"OVMF {code}, {nvram}, acceleration {args.accel}", flush=True)
     with tempfile.TemporaryDirectory(prefix="neboot-ovmf-") as tmp:
         root = Path(tmp)
-        if args.arm64_menu:
+        if args.arm64_linux:
+            exercise_arm64_linux(args, root, code, nvram)
+        elif args.arm64_menu:
             exercise_arm64_menu(args, root, code, nvram)
         elif args.core:
             exercise_core(args, root, code, nvram, preferred_image_base(args.esp / PAYLOAD[0]))

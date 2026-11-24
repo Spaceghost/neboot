@@ -131,3 +131,25 @@ stage-arm64: arm64
 
 smoke-arm64: stage-arm64
 	python3 tests/smoke-ovmf.py --arm64-menu --esp "$(ARM64_ESP)" --logs "$(ARM64_OUT)/logs"
+
+ARM64_LINUX_TEST_ESP ?= $(ARM64_OUT)/linux-test-esp
+
+.PHONY: stage-arm64-linux smoke-arm64-linux
+stage-arm64-linux: stage-arm64
+	@test -n "$(KERNEL)" && test -f "$(KERNEL)"
+	@test -n "$(INITRD)" && test -f "$(INITRD)"
+	install -Dm644 "$(KERNEL)" "$(ARM64_ESP)/boot/vmlinuz"
+	install -Dm644 "$(INITRD)" "$(ARM64_ESP)/boot/initramfs"
+
+$(ARM64_OUT)/test-init: tests/arm64-init.S Makefile | $(ARM64_OUT)
+	$(CLANG) --target=aarch64-none-elf -fuse-ld=lld -nostdlib -static \
+		-Wl,-e,_start "$<" -o "$@"
+
+$(ARM64_OUT)/test-initramfs: $(ARM64_OUT)/test-init tests/arm64-initramfs.py
+	python3 tests/arm64-initramfs.py "$<" "$@"
+
+smoke-arm64-linux: arm64 $(ARM64_OUT)/test-initramfs
+	$(MAKE) stage-arm64-linux ARM64_ESP="$(ARM64_LINUX_TEST_ESP)" \
+		KERNEL="$(KERNEL)" INITRD="$(ARM64_OUT)/test-initramfs"
+	python3 tests/smoke-ovmf.py --arm64-linux --esp "$(ARM64_LINUX_TEST_ESP)" \
+		--logs "$(ARM64_OUT)/logs"

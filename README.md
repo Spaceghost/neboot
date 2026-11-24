@@ -26,11 +26,23 @@ For a firmware test on Fedora Incus, install `qemu-system-aarch64-core`,
 make smoke-arm64 NELUA=/path/to/nelua
 ```
 
-The smoke builds a temporary GPT/FAT disk, boots it with QEMU TCG, and
-checks firmware relocation, the missing-kernel diagnostic, and child
-chainloading back to the menu. If firmware is installed elsewhere, set
-`OVMF_CODE` and `OVMF_VARS` to a matching AArch64 pflash pair. The ARM
-Cascadia kernel and initramfs boot path still needs an integration test.
+The menu smoke builds a temporary GPT/FAT disk, boots it with QEMU TCG,
+and checks firmware relocation, the missing-kernel diagnostic, and child
+chainloading back to the menu. Set `OVMF_CODE` and `OVMF_VARS` to a
+matching AArch64 pflash pair when firmware is installed elsewhere.
+
+For a Linux handoff test, supply an AArch64 EFI-stub kernel that supports
+uncompressed initramfs archives and the PL011 serial console:
+
+```sh
+make smoke-arm64-linux NELUA=/path/to/nelua KERNEL=/path/to/arm64/vmlinuz
+```
+
+The target builds a minimal static init, stages it in a separate test ESP,
+and checks that Linux executes it as PID 1 and powers off. It passed in
+Fedora Incus with Fedora’s `7.3.4-200.fc44.aarch64` kernel. To stage your own
+kernel and initramfs, use `make stage-arm64-linux KERNEL=... INITRD=...`.
+The ARM Cascadia and Theseus boot path still needs an integration test.
 
 
 ## Run in QEMU
